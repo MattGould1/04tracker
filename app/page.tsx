@@ -45,6 +45,16 @@ export default function Home() {
   useEffect(() => setTrials(loadTrials()), []);
   useEffect(() => () => stopPolling(), []);
 
+  // Smooth 1s elapsed ticker while polling (polls themselves are 15s+ apart).
+  useEffect(() => {
+    if (step !== "polling") return;
+    const tick = setInterval(() => {
+      const t = trialRef.current;
+      if (t) setElapsed(Math.round((Date.now() - Date.parse(t.loggedOutAt)) / 1000));
+    }, 1000);
+    return () => clearInterval(tick);
+  }, [step]);
+
   function stopPolling() {
     if (pollRef.current) clearTimeout(pollRef.current);
     pollRef.current = null;
@@ -113,7 +123,10 @@ export default function Home() {
     pollIntervalRef.current = POLL_MS;
     setElapsed(0);
     setStep("polling");
-    schedulePoll(500); // first check quickly, then every POLL_MS
+    // First poll a full interval out: the guard check above just hit the
+    // origin, and its rate limit is 1 request per 2 seconds. (Propagation
+    // takes minutes — an instant first check bought nothing and always 429'd.)
+    schedulePoll(POLL_MS);
   }
 
   function schedulePoll(delay: number) {
