@@ -21,8 +21,10 @@ import {
 
 const POLL_MS = 15_000;
 const TIMEOUT_MS = 30 * 60_000;
+const SETTLE_POLL_MS = 30_000;
+const SETTLE_REQUIRED_MS = 6 * 60_000; // > the ~5-min visibility cycle
 
-type Step = "enter" | "instruct" | "polling" | "result";
+type Step = "enter" | "settling" | "instruct" | "polling" | "result";
 
 export default function Home() {
   const [step, setStep] = useState<Step>("enter");
@@ -41,18 +43,28 @@ export default function Home() {
   const pollIntervalRef = useRef(POLL_MS);
   const trialRef = useRef<Trial | null>(null);
   const baselineRef = useRef<SkillEntry[] | null>(null);
+  const settleStartRef = useRef<number>(0);
+  const settledSecondsRef = useRef<number | null>(null);
+  const [settledFor, setSettledFor] = useState(0);
 
   useEffect(() => setTrials(loadTrials()), []);
   useEffect(() => () => stopPolling(), []);
 
-  // Smooth 1s elapsed ticker while polling (polls themselves are 15s+ apart).
+  // Smooth 1s tickers (the actual polls are 15-30s apart).
   useEffect(() => {
-    if (step !== "polling") return;
-    const tick = setInterval(() => {
-      const t = trialRef.current;
-      if (t) setElapsed(Math.round((Date.now() - Date.parse(t.loggedOutAt)) / 1000));
-    }, 1000);
-    return () => clearInterval(tick);
+    if (step === "polling") {
+      const tick = setInterval(() => {
+        const t = trialRef.current;
+        if (t) setElapsed(Math.round((Date.now() - Date.parse(t.loggedOutAt)) / 1000));
+      }, 1000);
+      return () => clearInterval(tick);
+    }
+    if (step === "settling") {
+      const tick = setInterval(() => {
+        setSettledFor(Math.round((Date.now() - settleStartRef.current) / 1000));
+      }, 1000);
+      return () => clearInterval(tick);
+    }
   }, [step]);
 
   function stopPolling() {
@@ -73,12 +85,45 @@ export default function Home() {
       }
       setBaseline(entries);
       baselineRef.current = entries;
-      setStep("instruct");
+      settleStartRef.current = Date.now();
+      setSettledFor(0);
+      setStep("settling");
+      schedule(settlePoll, SETTLE_POLL_MS);
     } catch (e) {
       setError(e instanceof Error ? e.message : "fetch failed");
     } finally {
       setBusy(false);
     }
+  }
+
+  // Settling phase: the trial may only start from a provably-quiet account.
+  // Any value change here means an *earlier* logout was still becoming
+  // visible — it silently becomes the new baseline and the clock restarts.
+  // This prevents stale logouts from masquerading as the trial's landing.
+  async function settlePoll() {
+    if (!baselineRef.current) return;
+    try {
+      const current = await fetchPlayer(name.trim());
+      if (current.length > 0 && hasChanged(baselineRef.current, current)) {
+        setBaseline(current);
+        baselineRef.current = current;
+        settleStartRef.current = Date.now();
+        setWarning(
+          "A leftover update landed during the wait — baseline refreshed, settle timer restarted.",
+        );
+      }
+    } catch {
+      // Missed settle poll: fine, try again next tick.
+    }
+    const settledMs = Date.now() - settleStartRef.current;
+    setSettledFor(Math.round(settledMs / 1000));
+    if (settledMs >= SETTLE_REQUIRED_MS) {
+      settledSecondsRef.current = Math.round(settledMs / 1000);
+      setWarning(null);
+      setStep("instruct");
+      return;
+    }
+    schedule(settlePoll, SETTLE_POLL_MS);
   }
 
   async function loggedOutNow() {
@@ -114,6 +159,7 @@ export default function Home() {
       delaySeconds: null,
       xpGained: null,
       pollIntervalSeconds: POLL_MS / 1000,
+      settledSeconds: settledSecondsRef.current,
       status: "abandoned", // upgraded on landing/timeout; stays if tab closes
       userAgentHint: userAgentHint(),
     };
@@ -126,11 +172,11 @@ export default function Home() {
     // First poll a full interval out: the guard check above just hit the
     // origin, and its rate limit is 1 request per 2 seconds. (Propagation
     // takes minutes — an instant first check bought nothing and always 429'd.)
-    schedulePoll(POLL_MS);
+    schedule(poll, POLL_MS);
   }
 
-  function schedulePoll(delay: number) {
-    pollRef.current = setTimeout(poll, delay);
+  function schedule(fn: () => void, delay: number) {
+    pollRef.current = setTimeout(fn, delay);
   }
 
   async function poll() {
@@ -167,7 +213,7 @@ export default function Home() {
       }
       // Other errors: skip this poll, try again next tick.
     }
-    schedulePoll(pollIntervalRef.current);
+    schedule(poll, pollIntervalRef.current);
   }
 
   function finishTrial(finished: Trial) {
@@ -185,6 +231,7 @@ export default function Home() {
     baselineRef.current = null;
     setTrial(null);
     trialRef.current = null;
+    settledSecondsRef.current = null;
     setError(null);
     setWarning(null);
   }
@@ -235,9 +282,33 @@ export default function Home() {
         </section>
       )}
 
+      {step === "settling" && baseline && (
+        <section className="card">
+          <h2>2 · Making sure your account is settled…</h2>
+          <p className="bigNumber">
+            {Math.floor(settledFor / 60)}m {settledFor % 60}s /{" "}
+            {SETTLE_REQUIRED_MS / 60_000}m
+          </p>
+          <p>
+            Before the trial starts, we wait for {SETTLE_REQUIRED_MS / 60_000}{" "}
+            minutes of no hiscores changes for <b>{name.trim()}</b>. This
+            guarantees no leftover update from an earlier session can
+            contaminate the measurement. If anything lands, the timer restarts
+            automatically.
+          </p>
+          <p className="dim">
+            Don&apos;t log out during this wait (staying logged in is fine —
+            play on!). Keep this tab open.
+          </p>
+          <button className="ghost" onClick={reset}>
+            start over
+          </button>
+        </section>
+      )}
+
       {step === "instruct" && baseline && (
         <section className="card">
-          <h2>2 · Go gain some XP</h2>
+          <h2>3 · Go gain some XP</h2>
           <p>
             Baseline captured for <b>{name.trim()}</b> — total XP{" "}
             <b>{xp(totalValue(baseline)).toLocaleString()}</b>.
@@ -263,7 +334,7 @@ export default function Home() {
 
       {step === "polling" && trial && (
         <section className="card">
-          <h2>3 · Waiting for your XP to land…</h2>
+          <h2>4 · Waiting for your XP to land…</h2>
           <p className="bigNumber">{fmtDelay(elapsed)}</p>
           <p>
             since your logout at {fmtClock(trial.loggedOutAt)}. Checking the

@@ -36,12 +36,21 @@ interval for the rest of the trial) and shows a warning.
 
 ## The Dummy Flow (mirrors the real record flow)
 
-One page, a wizard of four steps:
+One page, a wizard of five steps:
 
 1. **Enter account name** → app fetches current stats via the proxy and
    shows total XP + per-skill values (this is "baseline A"). Any name can be
    entered — testers use their own accounts.
-2. **Instruction screen**: "Log in, gain some XP (any skill), then log out.
+2. **Settling gate** (added 2026-07-05): the app polls every 30s and requires
+   **6 consecutive minutes with no hiscores change** (longer than the ~5-min
+   visibility cycle) before the trial may start. If a leftover update from an
+   earlier session lands during the wait, it silently becomes the new
+   baseline and the timer restarts. Rationale: without this, a pre-trial
+   logout still becoming visible can masquerade as the trial's landing and
+   record an impossibly short delay. The achieved quiet time is stored on
+   the trial as `settledSeconds`. (Staying logged in during the wait is
+   fine — only logouts change the hiscores.)
+3. **Instruction screen**: "Log in, gain some XP (any skill), then log out.
    The moment you log out, click the button." The **"I just logged out"**
    button stamps `loggedOutAt` (client clock).
 3. **Polling screen**: app polls every 15s (each request `_cb`-busted via

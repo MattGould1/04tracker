@@ -11,6 +11,7 @@ export type Trial = {
   delaySeconds: number | null;
   xpGained: number | null; // whole XP (value diff / 10)
   pollIntervalSeconds: number;
+  settledSeconds: number | null; // how long the account was provably quiet before the trial session
   status: TrialStatus;
   userAgentHint: string; // coarse, for dedup when aggregating results
 };
