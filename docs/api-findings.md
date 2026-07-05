@@ -69,6 +69,27 @@ layer is not. Reading the engine settles the mechanism split:
   fetch 60s later. Fresh data ⇒ lazy cache (expired entry regenerates
   from the already-updated DB); stale ⇒ fixed grid.
 
+### Archived website source read (2004Scape/Website, frozen 2025-02, read 2026-07-05)
+
+The pre-API website (HTML hiscores pages) is archived and public. It predates
+the JSON API, rate limiting, and the 5-min cache (none are present), but:
+
+- **A `date` column exists on the hiscore DB rows** (`hiscore.date`,
+  selected by the old pages and used for rank tie-breaking). The engine
+  writes it on every logout update. So "when was this row last updated"
+  exists server-side; the current JSON API just doesn't expose it — even
+  though the API docs still list a `date` field in responses. This looks
+  like a docs/API mismatch worth reporting upstream: if the API returned
+  `date`, landing→logout inference would become exact (~seconds) and most
+  of our boundary uncertainty would vanish.
+- Rank semantics: `row_number` ordered by value desc, ties broken by
+  earliest `date`; Overall sorts level desc first, then value, then date.
+- XP×10 storage confirmed independently (level thresholds computed as
+  `floor(acc/4)*10`).
+- Weak stylistic hint: the one cache in that era (world list) is a
+  `setInterval` timer refresh — the author's habit leans timer-based, not
+  lazy. Test B remains the decider for the current hiscores cache.
+
 ## Response shape (verified 2026-07-03)
 
 - **No `date` field** on either endpoint, despite the docs. Entries are
