@@ -41,11 +41,33 @@ docs are out of date; where they disagree with observation, observation wins.
   logouts' XP (41 + 42 = 83) in a single update — batch/tick behavior.
 - Model: logouts are picked up by the next ~5-min tick; delay = time to
   next tick, anywhere in [0, ~cycle].
-- **Unknown (tests pending):** whether the tick grid is global (server
-  batch job) or per-player (origin cache TTL, possibly phase-anchored by
-  our own request timing). Discriminating tests: staggered multi-player
-  monitoring (grid alignment) and the idle-phase test (unpolled player,
-  logout, single fetch 60s later — fresh data ⇒ cache, stale ⇒ batch).
+
+### Where the cycle lives — engine source read (2026-07-05)
+
+The game engine is open source (`LostCityRS/Engine-TS`); the website/API
+layer is not. Reading the engine settles the mechanism split:
+
+- **The hiscores database updates within seconds of logout.** The world
+  posts a `player_logout` message (with the save) to the login server,
+  which writes the `hiscore`/`hiscore_large` tables immediately
+  (`src/server/login/LoginServer.ts`, `updateHiscores`). Event-driven —
+  no batch job in the engine.
+- **Only logout updates hiscores.** The periodic `player_autosave` writes
+  the save file only. XP genuinely cannot land mid-session.
+- The logout message retries every 15s until acknowledged, so under
+  login-server backpressure the DB write can lag in 15s steps — normally
+  seconds.
+- **Therefore the ~5-min quantization is a cache in the closed-source
+  website/API layer** between their DB and us (with Cloudflare's 15-min
+  edge cache stacked on top). Our `_cb` param demonstrably busts
+  Cloudflare but NOT this origin cache — we observed the 5-min delay on
+  cache-busted requests — so the origin cache is keyed by player, not URL.
+- **Remaining unknown (Test B, idle-phase):** whether the origin cache is
+  lazy (entry created on first request after expiry — phase anchored by
+  OUR polling, so we could phase-control it) or timer-based (global/fixed
+  refresh grid). Test: leave a player unpolled 20+ min, log out, single
+  fetch 60s later. Fresh data ⇒ lazy cache (expired entry regenerates
+  from the already-updated DB); stale ⇒ fixed grid.
 
 ## Response shape (verified 2026-07-03)
 
